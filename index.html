@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ステルス操作機能付きルーレット</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            max-width: 950px;
+            width: 100%;
+            gap: 40px;
+        }
+        .control-panel {
+            flex: 1.2;
+            min-width: 320px;
+        }
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        input[type="text"] {
+            flex: 2;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        input[type="number"] {
+            flex: 1;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            min-width: 60px;
+        }
+        button {
+            padding: 10px 15px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .add-btn { background-color: #28a745; color: white; }
+        .add-btn:hover { background-color: #218838; }
+        
+        .item-list {
+            list-style: none;
+            padding: 0;
+            max-height: 250px;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            border-radius: 5px;
+        }
+        .item-list li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid #eee;
+        }
+        .item-list li:last-child { border-bottom: none; }
+        
+        /* ターゲット選択用（見た目の変化を一切無くしたスタイル） */
+        .item-name {
+            cursor: pointer;
+            padding: 4px 0;
+            flex-grow: 1;
+            user-select: none; /* ダブルクリック時の青い選択ハイライトを防止 */
+            color: #333;
+        }
+        
+        /* ★【秘密のインジケーター】選択された時だけ、コロンの前にわずかな隙間（マージン）を作る */
+        .item-name.targeted .secret-colon {
+            margin-left: 4px; /* 絶妙に気づかれない隙間 */
+            color: #343a40;   /* 色も極端に変えず、ごく自然に */
+        }
+
+        .delete-btn { background-color: #dc3545; color: white; padding: 4px 8px; font-size: 12px; }
+        .delete-btn:hover { background-color: #c82333; }
+
+        .roulette-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            min-width: 300px;
+        }
+        .pointer {
+            width: 0;
+            height: 0;
+            border-left: 15px solid transparent;
+            border-right: 15px solid transparent;
+            border-top: 25px solid #e63946;
+            position: absolute;
+            top: -10px;
+            z-index: 10;
+            pointer-events: none;
+        }
+        canvas {
+            border-radius: 50%;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            cursor: pointer;
+        }
+        #result-display {
+            margin-top: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            height: 30px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="control-panel">
+        <h2>ルーレット設定</h2>
+        <div class="input-group">
+            <input type="text" id="item-input" placeholder="選択肢" maxlength="15">
+            <input type="number" id="weight-input" placeholder="比率" min="1" value="1">
+            <button class="add-btn" id="add-btn">追加</button>
+        </div>
+        
+        <h3>現在の選択肢</h3>
+        <ul class="item-list" id="item-list"></ul>
+    </div>
+
+    <div class="roulette-panel">
+        <div class="pointer"></div>
+        <canvas id="roulette-canvas" width="300" height="300" title="クリックしてルーレットを回す"></canvas>
+        <div id="result-display">円盤をクリックしてスタート！</div>
+    </div>
+</div>
+
+<script>
+    let items = [
+        { name: "ラーメン", weight: 1 },
+        { name: "カレー", weight: 2 },
+        { name: "パスタ", weight: 1 },
+        { name: "うどん", weight: 4 }
+    ];
+    
+    const colors = ["#ffadad", "#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#a0c4ff", "#bdb2ff", "#ffc6ff"];
+
+    const canvas = document.getElementById('roulette-canvas');
+    const ctx = canvas.getContext('2d');
+    const itemInput = document.getElementById('item-input');
+    const weightInput = document.getElementById('weight-input');
+    const addBtn = document.getElementById('add-btn');
+    const itemList = document.getElementById('item-list');
+    const resultDisplay = document.getElementById('result-display');
+
+    let currentAngle = 0; 
+    let isSpinning = false;
+    let targetIndex = null; 
+
+    function getTotalWeight() {
+        return items.reduce((sum, item) => sum + item.weight, 0);
+    }
+
+    function drawRoulette() {
+        const numSlices = items.length;
+        const totalWeight = getTotalWeight();
+        const radius = canvas.width / 2;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (numSlices === 0) {
+            ctx.fillStyle = "#ccc";
+            ctx.beginPath();
+            ctx.arc(radius, radius, radius, 0, 2 * Math.PI);
+            ctx.fill();
+            return;
+        }
+
+        let accumulatedAngle = currentAngle;
+
+        items.forEach((item, i) => {
+            const sliceAngle = (item.weight / totalWeight) * (2 * Math.PI);
+            const startAngle = accumulatedAngle;
+            const endAngle = startAngle + sliceAngle;
+
+            ctx.fillStyle = colors[i % colors.length];
+            ctx.beginPath();
+            ctx.moveTo(radius, radius);
+            ctx.arc(radius, radius, radius, startAngle, endAngle);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.save();
+            ctx.translate(radius, radius);
+            ctx.rotate(startAngle + sliceAngle / 2);
+            ctx.fillStyle = "#333";
+            ctx.font = "bold 14px sans-serif";
+            ctx.textAlign = "right";
+            ctx.textBaseline = "middle";
+            ctx.fillText(item.name, radius - 20, 0);
+            ctx.restore();
+
+            accumulatedAngle = endAngle;
+        });
+    }
+
+    // --- UI更新＆ステルスインジケーターの実装 ---
+    function updateList() {
+        itemList.innerHTML = '';
+        items.forEach((item, index) => {
+            const li = document.createElement('li');
+            
+            // ターゲットに選ばれているかどうかのクラス付与
+            const targetClass = (targetIndex === index) ? 'item-name targeted' : 'item-name';
+
+            // コロン（:）部分だけを<span>で囲み、CSSでわずかに動かせるようにする
+            li.innerHTML = `
+                <span class="${targetClass}" onclick="setTarget(${index})">
+                    ${item.name} (比率<span class="secret-colon">:</span>${item.weight})
+                </span>
+                <button class="delete-btn" onclick="deleteItem(${index})">削除</button>
+            `;
+            itemList.appendChild(li);
+        });
+        drawRoulette();
+    }
+
+    window.setTarget = function(index) {
+        if (isSpinning) return;
+        
+        if (targetIndex === index) {
+            targetIndex = null;
+        } else {
+            targetIndex = index;
+        }
+        updateList();
+    };
+
+    addBtn.addEventListener('click', () => {
+        const text = itemInput.value.trim();
+        const weight = parseInt(weightInput.value, 10);
+        if (text && weight > 0) {
+            items.push({ name: text, weight: weight });
+            itemInput.value = '';
+            weightInput.value = '1';
+            updateList();
+        }
+    });
+
+    window.deleteItem = function(index) {
+        if (isSpinning) return;
+        items.splice(index, 1);
+        if (targetIndex === index) targetIndex = null;
+        else if (targetIndex > index) targetIndex--; 
+        updateList();
+    };
+
+    // --- 回転アニメーション ---
+    canvas.addEventListener('click', () => {
+        if (isSpinning || items.length === 0) return;
+
+        isSpinning = true;
+        resultDisplay.textContent = "抽選中...";
+
+        const totalWeight = getTotalWeight();
+        let finalWinningIndex = targetIndex;
+
+        if (finalWinningIndex === null) {
+            let randomWeight = Math.random() * totalWeight;
+            for (let i = 0; i < items.length; i++) {
+                randomWeight -= items[i].weight;
+                if (randomWeight <= 0) {
+                    finalWinningIndex = i;
+                    break;
+                }
+            }
+        }
+
+        let weightSumBefore = 0;
+        for (let i = 0; i < finalWinningIndex; i++) {
+            weightSumBefore += items[i].weight;
+        }
+        const targetStartAngleRatio = weightSumBefore / totalWeight;
+        const targetEndAngleRatio = (weightSumBefore + items[finalWinningIndex].weight) / totalWeight;
+        
+        const targetCenterRatio = (targetStartAngleRatio + targetEndAngleRatio) / 2;
+        const targetCenterAngle = targetCenterRatio * 2 * Math.PI;
+
+        let baseStopAngle = (1.5 * Math.PI) - targetCenterAngle;
+        if (baseStopAngle < 0) baseStopAngle += 2 * Math.PI;
+
+        const spinAngle = baseStopAngle + (5 * 2 * Math.PI);
+        
+        const duration = 4000; 
+        const startTime = performance.now();
+
+        function animate(currentTime) {
+            const elapsed = currentTime - startTime;
+
+            if (elapsed < duration) {
+                const progress = elapsed / duration;
+                const easeOutProgress = 1 - Math.pow(1 - progress, 3); 
+                currentAngle = easeOutProgress * spinAngle;
+                
+                drawRoulette();
+                requestAnimationFrame(animate);
+            } else {
+                currentAngle = spinAngle;
+                drawRoulette();
+                isSpinning = false;
+
+                resultDisplay.textContent = `結果：🎉 ${items[finalWinningIndex].name} 🎉`;
+                
+                // バレ防止のため、終了時にターゲット選択をリセット
+                targetIndex = null;
+                updateList();
+            }
+        }
+
+        requestAnimationFrame(animate);
+    });
+
+    updateList();
+</script>
+
+</body>
+</html>
